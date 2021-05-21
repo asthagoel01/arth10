@@ -1,0 +1,160 @@
+- hosts: docker
+  vars:
+  - volumeweb: volweb
+  - conf_file: httpd.conf
+
+  vars_prompt:
+  - name: dvdname
+    prompt: "Enter directory Name for mountpoint for dvd"
+    private: no
+  - name: container_name
+    prompt: "Enter Container Name"
+    private: no
+  - name: dnsip
+    prompt: "Enter your DNS ip"
+    private: no
+  - name: webpage
+    prompt: "Webpage you want to deploy there...."
+    private: yes
+  - name: base_port
+    prompt: "Enter BaseOS port for using container exposing"   
+    private: yes
+  - name: container_port
+    prompt: "Enter container port on which service is running"
+    private: no
+
+  tasks:
+  - name: "Making SELinux Disabled"
+    selinux:
+      state: disabled
+    register: security
+  
+  - name: "Rebooting target machine"
+    reboot:
+      test_command: "whoami"
+    when: security['state'] != "disabled"
+
+  - name: "Making Changes in DNS server Configuration file...Change1"
+    copy:
+      src: /etc/NetworkManager/conf.d/90-dns-none.conf
+      dest: /etc/NetworkManager/conf.d/90-dns-none.conf
+    
+  - name: "Making Changes in DNS server Configuration file...Change2"
+    service:
+      name: NetworkManager
+      state: reloaded
+
+  - name: "Making Changes in DNS server Configuration file...Change3"
+    template:
+      src: dns.conf
+      dest: /etc/resolv.conf
+   
+  - name: "Making Changes in DNS server Configuration file...Change4"
+    service:
+      name: NetworkManager
+      state: reloaded
+
+  - name: "Making MountPoint for yum"
+    file:
+      state: directory
+      path: "/{{ dvdname }}"
+
+  - name: "Mounting dvd"
+    mount:
+      state: mounted
+      src: /dev/cdrom
+      path: "/{{ dvdname }}" 
+      fstype: iso9660
+
+  - name: "Configuring yum for AppStream"
+    yum_repository:
+      baseurl: /{{ dvdname }}/AppStream
+      description: path1
+      file: myfile
+      name: Appstream
+      gpgcheck: no
+
+  - name: "Configuring yum for BaseOS"
+    yum_repository:
+      baseurl: /{{ dvdname }}/BaseOS
+      description: path2
+      file: myfile
+      name: BaseOS
+      gpgcheck: no
+
+  - name: "Adding docker download links for downloading"
+    yum_repository:
+      baseurl: https://download.docker.com/linux/centos/7/x86_64/stable/
+      description: docker_path
+      file: myfile
+      name: docker
+      gpgcheck: no  
+
+  - name: "Checking if docker is installed or not"
+    service:
+      name: docker
+      state: started
+    register: x
+    ignore_errors: true
+   
+  - name: "Installing Docker Software not installed before"
+    command: "yum install docker-ce -y --nobest"
+    when: (x['failed'] == true and x['msg'][ :47 ] == "Could not find the requested service docker-ce:") or x['state'] != "started" 
+
+  - name: "starting and enabling docker service"
+    service:
+      name: "docker"
+      state: started
+      enabled: yes
+
+  - name: "installing python"
+    package:
+      name: "python3"
+      state: present
+
+  - name: "download Python library for Connecting to Docker"
+    pip:
+      name: "docker"
+      state: present
+
+  - name: "Making folder for webpages"
+    file:
+      path: /root/{{ volumeweb }}
+      state: directory
+    ignore_errors: true
+  
+  - name: "Copying webpages"
+    template:
+      src: "{{ webpage }}"
+      dest: /root/{{ volumeweb }}/{{ webpage }}
+  
+  - name: "Copying modified configuration file for webserver"
+    template:
+      src: "{{ conf_file }}"
+      dest: /root/{{ conf_file }}
+      
+  - name: "pulling image to launch docker container"
+    docker_image:
+      name: httpd
+
+  - name: "Launching containers"
+    docker_container:
+      name: "{{ container_name }}"
+      image: httpd
+      state: present
+      detach: True
+      working_dir: /var/www/html
+      exposed_ports: "{{ container_port }}" 
+      published_ports:
+      - "{{ base_port }}:{{ container_port }}"
+      volumes:
+      - /root/{{ volumeweb }}/{{ webpage }}:/var/www/html/{{ webpage }}
+      - /root/{{ conf_file }}:/usr/local/apache2/conf/{{ conf_file }}
+
+  - name: Restarting Docker Container"
+    command: docker restart {{ container_name }}
+
+  - name: "Checking status of webpages"
+    uri:
+      url: http://localhost:{{ base_port }}/{{ webpage }}
+
